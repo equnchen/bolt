@@ -47,7 +47,7 @@ type DB struct {
 	// A panic is issued if the database is in an inconsistent state. This
 	// flag has a large performance impact so it should only be used for
 	// debugging purposes.
-	StrictMode bool
+	StrictMode bool // -- debug开关，用于强一致校验
 
 	// Setting the NoSync flag will cause the database to skip fsync()
 	// calls after each commit. This can be useful when bulk loading data
@@ -59,7 +59,7 @@ type DB struct {
 	// ignored.  See the comment on that constant for more details.
 	//
 	// THIS IS UNSAFE. PLEASE USE WITH CAUTION.
-	NoSync bool
+	NoSync bool // -- 已废弃，为true时不 file.Sync()
 
 	// When true, skips the truncate call when growing the database.
 	// Setting this to true is only safe on non-ext3/ext4 systems.
@@ -67,7 +67,7 @@ type DB struct {
 	// bypasses a truncate() and fsync() syscall on remapping.
 	//
 	// https://github.com/boltdb/bolt/issues/284
-	NoGrowSync bool
+	NoGrowSync bool // -- 为true时，db文件扩容后不file.Sync()，用于兼容ext3/ext4文件系统
 
 	// If you want to read the entire database fast, you can set MmapFlag to
 	// syscall.MAP_POPULATE on Linux 2.6.23+ for sequential read-ahead.
@@ -79,7 +79,7 @@ type DB struct {
 	// If <=0, disables batching.
 	//
 	// Do not change concurrently with calls to Batch.
-	MaxBatchSize int
+	MaxBatchSize int // -- Batch方法支持批处理大小
 
 	// MaxBatchDelay is the maximum delay before a batch starts.
 	// Default value is copied from DefaultMaxBatchDelay in Open.
@@ -87,32 +87,32 @@ type DB struct {
 	// If <=0, effectively disables batching.
 	//
 	// Do not change concurrently with calls to Batch.
-	MaxBatchDelay time.Duration
+	MaxBatchDelay time.Duration // -- 延时调用 batch
 
 	// AllocSize is the amount of space allocated when the database
 	// needs to create new pages. This is done to amortize the cost
 	// of truncate() and fsync() when growing the data file.
-	AllocSize int
+	AllocSize int // -- db文件扩容最大的size
 
 	path     string            // -- db文件本地路径名
 	file     *os.File          // -- db文件file实例
 	lockfile *os.File          // windows only -- windows文件锁，保证只有有一个进程以读写模式打开db文件
 	dataref  []byte            // mmap'ed readonly, write throws SEGV
-	data     *[maxMapSize]byte // -- file通过mmap映射到该地址
-	datasz   int
-	filesz   int // current on disk file size
-	meta0    *meta
-	meta1    *meta
+	data     *[maxMapSize]byte // -- file通过mmap映射到该内存地址，用于读磁盘，减少IO系统调用，保证性能。
+	datasz   int               // -- mmap映射的文件大小
+	filesz   int               // current on disk file size
+	meta0    *meta             // -- 第0页
+	meta1    *meta             // -- 第1页
 	pageSize int
-	opened   bool
-	rwtx     *Tx
-	txs      []*Tx
-	freelist *freelist
-	stats    Stats
+	opened   bool      // -- db状态，close后设置为false，增量事务会直接报错
+	rwtx     *Tx       // -- 当前读写事务
+	txs      []*Tx     // -- 所有事务
+	freelist *freelist // -- page管理，支持page（对应文件页）的申请、释放、回滚等
+	stats    Stats     // -- 统计
 
-	pagePool sync.Pool
+	pagePool sync.Pool // -- page对象池
 
-	batchMu sync.Mutex
+	batchMu sync.Mutex // -- batch 依赖的锁
 	batch   *batch
 
 	rwlock   sync.Mutex   // Allows only one writer at a time.
@@ -120,7 +120,7 @@ type DB struct {
 	mmaplock sync.RWMutex // Protects mmap access during remapping.
 	statlock sync.RWMutex // Protects stats access.
 
-	ops struct {
+	ops struct { // -- 指向 file.WriteAt，用于写磁盘，被调用后，通常会接着 file.Sync()，保证强一致。
 		writeAt func(b []byte, off int64) (n int, err error)
 	}
 
@@ -147,6 +147,7 @@ func (db *DB) String() string {
 // Open creates and opens a database at the given path.
 // If the file does not exist then it will be created automatically.
 // Passing in nil options will cause Bolt to open the database with the default options.
+// -- 打开db文件，做mmap映射
 func Open(path string, mode os.FileMode, options *Options) (*DB, error) {
 	var db = &DB{opened: true}
 
