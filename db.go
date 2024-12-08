@@ -94,11 +94,11 @@ type DB struct {
 	// of truncate() and fsync() when growing the data file.
 	AllocSize int
 
-	path     string
-	file     *os.File
-	lockfile *os.File // windows only
-	dataref  []byte   // mmap'ed readonly, write throws SEGV
-	data     *[maxMapSize]byte
+	path     string            // -- db文件本地路径名
+	file     *os.File          // -- db文件file实例
+	lockfile *os.File          // windows only -- windows文件锁，保证只有有一个进程以读写模式打开db文件
+	dataref  []byte            // mmap'ed readonly, write throws SEGV
+	data     *[maxMapSize]byte // -- file通过mmap映射到该地址
 	datasz   int
 	filesz   int // current on disk file size
 	meta0    *meta
