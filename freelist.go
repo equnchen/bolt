@@ -8,10 +8,14 @@ import (
 
 // freelist represents a list of all pages that are available for allocation.
 // It also tracks pages that have been freed but are still in use by open transactions.
+// -- page管理器，用于快速分配和释放page
 type freelist struct {
-	ids     []pgid          // all free and available free page ids.
+	// -- 空闲页，free page
+	ids []pgid // all free and available free page ids.
+	// -- 临时页，tx临时占用的page
 	pending map[txid][]pgid // mapping of soon-to-be free page ids by tx.
-	cache   map[pgid]bool   // fast lookup of all free and pending page ids.
+	// -- 空闲页 + 临时页
+	cache map[pgid]bool // fast lookup of all free and pending page ids.
 }
 
 // newFreelist returns an empty, initialized freelist.
@@ -53,6 +57,7 @@ func (f *freelist) pending_count() int {
 
 // copyall copies into dst a list of all free ids and all pending ids in one sorted list.
 // f.count returns the minimum length required for dst.
+// -- 复制所有 pgid 到 dst中
 func (f *freelist) copyall(dst []pgid) {
 	m := make(pgids, 0, f.pending_count())
 	for _, list := range f.pending {
@@ -64,6 +69,7 @@ func (f *freelist) copyall(dst []pgid) {
 
 // allocate returns the starting page id of a contiguous list of pages of a given size.
 // If a contiguous block cannot be found then 0 is returned.
+// -- page分配， 从 freelist中分配大小为 n 的连续page，分配成功时从 ids 和 cache 中删除
 func (f *freelist) allocate(n int) pgid {
 	if len(f.ids) == 0 {
 		return 0
@@ -108,6 +114,7 @@ func (f *freelist) allocate(n int) pgid {
 
 // free releases a page and its overflow for a given transaction id.
 // If the page is already free then a panic will occur.
+// -- page预释放到 pending 和 cache 中，主要用于写事务commit前释放已占用的page
 func (f *freelist) free(txid txid, p *page) {
 	if p.id <= 1 {
 		panic(fmt.Sprintf("cannot free page 0 or 1: %d", p.id))
@@ -129,6 +136,7 @@ func (f *freelist) free(txid txid, p *page) {
 }
 
 // release moves all page ids for a transaction id (or older) to the freelist.
+// -- page完全释放，将tx以及更老事务的所有page从pending中删除，merge到 ids中
 func (f *freelist) release(txid txid) {
 	m := make(pgids, 0)
 	for tid, ids := range f.pending {
@@ -144,6 +152,7 @@ func (f *freelist) release(txid txid) {
 }
 
 // rollback removes the pages from a given pending tx.
+// -- 事务回滚，删除pending和cache，调用本函数后通常会 freeList.reload()
 func (f *freelist) rollback(txid txid) {
 	// Remove page ids from cache.
 	for _, id := range f.pending[txid] {
@@ -160,6 +169,7 @@ func (f *freelist) freed(pgid pgid) bool {
 }
 
 // read initializes the freelist from a freelist page.
+// -- 读磁盘page（freeList类型的page）
 func (f *freelist) read(p *page) {
 	// If the page.count is at the max uint16 value (64k) then it's considered
 	// an overflow and the size of the freelist is stored as the first element.
@@ -188,6 +198,7 @@ func (f *freelist) read(p *page) {
 // write writes the page ids onto a freelist page. All free and pending ids are
 // saved to disk since in the event of a program crash, all pending ids will
 // become free.
+// -- 写磁盘page
 func (f *freelist) write(p *page) error {
 	// Combine the old free pgids and pgids waiting on an open transaction.
 
@@ -212,6 +223,7 @@ func (f *freelist) write(p *page) error {
 }
 
 // reload reads the freelist from a page and filters out pending items.
+// -- 重新加载磁盘中的 freelist
 func (f *freelist) reload(p *page) {
 	f.read(p)
 

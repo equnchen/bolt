@@ -27,12 +27,15 @@ const (
 
 type pgid uint64
 
+// -- 磁盘page的内存体现
+// -- DB.page(pgid) 会从 DB.data 中拿到第pageid页的数据，并转为 *page
+// -- 注意到 DB.data由磁盘mmap而来，表示一大块连续内存
 type page struct {
 	id       pgid
-	flags    uint16
-	count    uint16
-	overflow uint32
-	ptr      uintptr
+	flags    uint16  // -- 4种类型的page
+	count    uint16  // -- freelist的page数 || branch/leaf 的key数
+	overflow uint32  // -- 当前页不够放数据时，后面连续的页的数目
+	ptr      uintptr // -- 实际数据的开始地址，同时也是 page.meta()返回的地址，返回时强转为 *meta
 }
 
 // typ returns a human readable page type string used for debugging.

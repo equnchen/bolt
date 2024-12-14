@@ -968,14 +968,15 @@ type Info struct {
 	PageSize int
 }
 
+// -- metaPage类型的页，被 page.ptr指向
 type meta struct {
 	magic    uint32
 	version  uint32
-	pageSize uint32
+	pageSize uint32 // 系统分页大小，记录在meta page中方便下次加载db文件
 	flags    uint32
-	root     bucket
-	freelist pgid
-	pgid     pgid
+	root     bucket // -- 根bucket
+	freelist pgid   // -- freelist在那一页，默认值2，扩容后可能变为其他页
+	pgid     pgid   // -- 已分配的最大pgid
 	txid     txid
 	checksum uint64
 }
