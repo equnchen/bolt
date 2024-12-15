@@ -35,7 +35,7 @@ type page struct {
 	flags    uint16  // -- 4种类型的page
 	count    uint16  // -- freelist的page数 || branch/leaf 的key数
 	overflow uint32  // -- 当前页不够放数据时，后面连续的页的数目
-	ptr      uintptr // -- 实际数据的开始地址，同时也是 page.meta()返回的地址，返回时强转为 *meta
+	ptr      uintptr // -- 实际数据的开始地址，不同类型的page，会强转为不同指针再返回
 }
 
 // typ returns a human readable page type string used for debugging.
@@ -77,6 +77,7 @@ func (p *page) branchPageElement(index uint16) *branchPageElement {
 }
 
 // branchPageElements retrieves a list of branch nodes.
+// -- 获取 branch page 页中的所有结点
 func (p *page) branchPageElements() []branchPageElement {
 	if p.count == 0 {
 		return nil
@@ -98,9 +99,9 @@ func (s pages) Less(i, j int) bool { return s[i].id < s[j].id }
 
 // branchPageElement represents a node on a branch page.
 type branchPageElement struct {
-	pos   uint32
-	ksize uint32
-	pgid  pgid
+	pos   uint32 // -- key的位置
+	ksize uint32 // -- key的大小
+	pgid  pgid   // -- value所在的page（可能是 branchPage 也可能是 leafPage，但最终value 都在 leafPage）
 }
 
 // key returns a byte slice of the node key.
@@ -111,10 +112,10 @@ func (n *branchPageElement) key() []byte {
 
 // leafPageElement represents a node on a leaf page.
 type leafPageElement struct {
-	flags uint32
-	pos   uint32
-	ksize uint32
-	vsize uint32
+	flags uint32 // -- 0-普通数据，1-bucket数据（bucket可以嵌套）
+	pos   uint32 // -- key和value的位置
+	ksize uint32 // -- key的大小
+	vsize uint32 // -- value的大小
 }
 
 // key returns a byte slice of the node key.

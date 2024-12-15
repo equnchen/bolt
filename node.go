@@ -8,16 +8,17 @@ import (
 )
 
 // node represents an in-memory, deserialized page.
+// -- b+树的节点
 type node struct {
-	bucket     *Bucket
+	bucket     *Bucket // -- 所属bucket
 	isLeaf     bool
-	unbalanced bool
-	spilled    bool
+	unbalanced bool // -- 为true时，表示将来有可能被合并
+	spilled    bool // -- 是否已分裂
 	key        []byte
 	pgid       pgid
 	parent     *node
 	children   nodes
-	inodes     inodes
+	inodes     inodes // -- left的kv对，或branch的k
 }
 
 // root returns the top-level node this node is attached to.
@@ -587,13 +588,16 @@ func (n *node) dump() {
 
 type nodes []*node
 
-func (s nodes) Len() int           { return len(s) }
-func (s nodes) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
-func (s nodes) Less(i, j int) bool { return bytes.Compare(s[i].inodes[0].key, s[j].inodes[0].key) == -1 }
+func (s nodes) Len() int      { return len(s) }
+func (s nodes) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
+func (s nodes) Less(i, j int) bool {
+	return bytes.Compare(s[i].inodes[0].key, s[j].inodes[0].key) == -1
+}
 
 // inode represents an internal node inside of a node.
 // It can be used to point to elements in a page or point
 // to an element which hasn't been added to a page yet.
+// -- 由 leafPageElement 或 branchPageElement 反序列化到内存
 type inode struct {
 	flags uint32
 	pgid  pgid
