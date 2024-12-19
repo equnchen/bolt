@@ -15,6 +15,7 @@ import (
 // Changing data while traversing with a cursor may cause it to be invalidated
 // and return unexpected keys and/or values. You must reposition your cursor
 // after mutating data.
+// -- 迭代器，主要用于B+树的二分查找
 type Cursor struct {
 	bucket *Bucket
 	stack  []elemRef
@@ -260,10 +261,11 @@ func (c *Cursor) search(key []byte, pgid pgid) {
 
 	// If we're on a leaf page/node then find the specific node.
 	if e.isLeaf() {
+		// -- 递归的退出条件，对叶子节点二分
 		c.nsearch(key)
 		return
 	}
-
+	// -- 非叶子节点，优先对node二分，node为nil时则对page二分
 	if n != nil {
 		c.searchNode(key, n)
 		return
@@ -315,6 +317,7 @@ func (c *Cursor) searchPage(key []byte, p *page) {
 }
 
 // nsearch searches the leaf node on the top of the stack for a key.
+// -- 对叶子节点二分（有node二分node，否则二分page），记录下第1个大于等于key的位置
 func (c *Cursor) nsearch(key []byte) {
 	e := &c.stack[len(c.stack)-1]
 	p, n := e.page, e.node
@@ -377,6 +380,7 @@ func (c *Cursor) node() *node {
 }
 
 // elemRef represents a reference to an element on a given page/node.
+// -- B+树节点，优先取node（即内存值），miss时取page
 type elemRef struct {
 	page  *page
 	node  *node

@@ -8,7 +8,7 @@ import (
 )
 
 // node represents an in-memory, deserialized page.
-// -- b+树的节点
+// -- b+树的节点, page反序列化到node，有node优先用node，没node才用page
 type node struct {
 	bucket     *Bucket // -- 所属bucket
 	isLeaf     bool
@@ -18,7 +18,7 @@ type node struct {
 	pgid       pgid
 	parent     *node
 	children   nodes
-	inodes     inodes // -- left的kv对，或branch的k
+	inodes     inodes // -- leaf的kv对，或branch的k
 }
 
 // root returns the top-level node this node is attached to.
@@ -248,6 +248,7 @@ func (n *node) write(p *page) {
 
 // split breaks up a node into multiple smaller nodes, if appropriate.
 // This should only be called from the spill() function.
+// -- 当前节点分裂成多个节点，挂在当前节点下作为子节点
 func (n *node) split(pageSize int) []*node {
 	var nodes []*node
 
@@ -274,20 +275,24 @@ func (n *node) split(pageSize int) []*node {
 func (n *node) splitTwo(pageSize int) (*node, *node) {
 	// Ignore the split if the page doesn't have at least enough nodes for
 	// two pages or if the nodes can fit in a single page.
+	// -- 当前节点中的key太少，不分裂。如果当前节点数据量小于1个page，不分裂
 	if len(n.inodes) <= (minKeysPerPage*2) || n.sizeLessThan(pageSize) {
 		return n, nil
 	}
 
 	// Determine the threshold before starting a new node.
+	// -- 计算分裂阈值，默认0.5，上下界为 [0.1, 1]
 	var fillPercent = n.bucket.FillPercent
 	if fillPercent < minFillPercent {
 		fillPercent = minFillPercent
 	} else if fillPercent > maxFillPercent {
 		fillPercent = maxFillPercent
 	}
+	// -- 分裂阈值，默认 0.5页的大小
 	threshold := int(float64(pageSize) * fillPercent)
 
 	// Determine split position and sizes of the two pages.
+	// -- 查找分裂位置
 	splitIndex, _ := n.splitIndex(threshold)
 
 	// Split node into two separate nodes.
@@ -297,6 +302,7 @@ func (n *node) splitTwo(pageSize int) (*node, *node) {
 	}
 
 	// Create a new node and add it to the parent.
+	// -- 开始分裂，分裂后的两个节点都挂在原来的父节点下
 	next := &node{bucket: n.bucket, isLeaf: n.isLeaf, parent: n.parent}
 	n.parent.children = append(n.parent.children, next)
 
@@ -313,6 +319,7 @@ func (n *node) splitTwo(pageSize int) (*node, *node) {
 // splitIndex finds the position where a page will fill a given threshold.
 // It returns the index as well as the size of the first page.
 // This is only be called from split().
+// -- 查找分裂位置（按顺序累加数据进行判断）
 func (n *node) splitIndex(threshold int) (index, sz int) {
 	sz = pageHeaderSize
 
@@ -337,6 +344,7 @@ func (n *node) splitIndex(threshold int) (index, sz int) {
 
 // spill writes the nodes to dirty pages and splits nodes as it goes.
 // Returns an error if dirty pages cannot be allocated.
+// -- 真正的b+树节点分裂
 func (n *node) spill() error {
 	var tx = n.bucket.tx
 	if n.spilled {
@@ -346,7 +354,9 @@ func (n *node) spill() error {
 	// Spill child nodes first. Child nodes can materialize sibling nodes in
 	// the case of split-merge so we cannot use a range loop. We have to check
 	// the children size on every loop iteration.
+	// -- 子节点按key升序，准备分裂
 	sort.Sort(n.children)
+	// -- 先递归分裂子节点
 	for i := 0; i < len(n.children); i++ {
 		if err := n.children[i].spill(); err != nil {
 			return err
@@ -357,6 +367,7 @@ func (n *node) spill() error {
 	n.children = nil
 
 	// Split nodes into appropriate sizes. The first node will always be n.
+	// -- 当前节点分裂成多个节点，挂在当前节点下作为子节点
 	var nodes = n.split(tx.db.pageSize)
 	for _, node := range nodes {
 		// Add node's page to the freelist if it's not new.
@@ -397,6 +408,7 @@ func (n *node) spill() error {
 
 	// If the root node split and created a new root then we need to spill that
 	// as well. We'll clear out the children to make sure it doesn't try to respill.
+	// -- 如果分裂生成了新的根节点，重新spill一下，避免子节点respill
 	if n.parent != nil && n.parent.pgid == 0 {
 		n.children = nil
 		return n.parent.spill()
@@ -407,7 +419,9 @@ func (n *node) spill() error {
 
 // rebalance attempts to combine the node with sibling nodes if the node fill
 // size is below a threshold or if there are not enough keys.
+// -- b+树节点合并
 func (n *node) rebalance() {
+	// -- 在事务中未删除数据，无需合并
 	if !n.unbalanced {
 		return
 	}
@@ -417,14 +431,17 @@ func (n *node) rebalance() {
 	n.bucket.tx.stats.Rebalance++
 
 	// Ignore if node is above threshold (25%) and has enough keys.
+	// -- 节点数据大于阈值，无需合并
 	var threshold = n.bucket.tx.db.pageSize / 4
 	if n.size() > threshold && len(n.inodes) > n.minKeys() {
 		return
 	}
 
 	// Root node has special handling.
+	// -- 当前是根节点
 	if n.parent == nil {
 		// If root node is a branch and only has one node then collapse it.
+		// -- 当前非叶子节点，且只有一个child，路径压缩
 		if !n.isLeaf && len(n.inodes) == 1 {
 			// Move root's child up.
 			child := n.bucket.node(n.inodes[0].pgid, n)
@@ -461,6 +478,7 @@ func (n *node) rebalance() {
 	_assert(n.parent.numChildren() > 1, "parent must have at least 2 children")
 
 	// Destination node is right sibling if idx == 0, otherwise left sibling.
+	// -- 如果当前节点是第1个节点，把右边的兄弟节点合并到当前节点，否则把当前节点合并到最左边的兄弟节点中
 	var target *node
 	var useNextSibling = (n.parent.childIndex(n) == 0)
 	if useNextSibling {

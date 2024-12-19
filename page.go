@@ -27,7 +27,7 @@ const (
 
 type pgid uint64
 
-// -- 磁盘page的内存体现
+// -- 磁盘page直接映射到内存
 // -- DB.page(pgid) 会从 DB.data 中拿到第pageid页的数据，并转为 *page
 // -- 注意到 DB.data由磁盘mmap而来，表示一大块连续内存
 type page struct {

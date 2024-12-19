@@ -33,20 +33,21 @@ const (
 const DefaultFillPercent = 0.5
 
 // Bucket represents a collection of key/value pairs inside the database.
+// -- 类似MySQL的table（但支持嵌套），同时也是B+树的内存表示
 type Bucket struct {
 	*bucket
-	tx       *Tx                // the associated transaction
-	buckets  map[string]*Bucket // subbucket cache
-	page     *page              // inline page reference
-	rootNode *node              // materialized node for the root page.
-	nodes    map[pgid]*node     // node cache
+	tx       *Tx                // the associated transaction -- 关联的事务id
+	buckets  map[string]*Bucket // subbucket cache -- 子bucket
+	page     *page              // inline page reference -- buket较小时，直接把所有数据inline在这个page中
+	rootNode *node              // materialized node for the root page. -- B+树根节点
+	nodes    map[pgid]*node     // node cache -- B+树节点的缓存
 
 	// Sets the threshold for filling nodes when they split. By default,
 	// the bucket will fill to 50% but it can be useful to increase this
 	// amount if you know that your write workloads are mostly append-only.
 	//
 	// This is non-persisted across transactions so it must be set in every Tx.
-	FillPercent float64
+	FillPercent float64 // -- 分裂阈值，默认0.5
 }
 
 // bucket represents the on-file representation of a bucket.
@@ -263,6 +264,7 @@ func (b *Bucket) DeleteBucket(key []byte) error {
 // Get retrieves the value for a key in the bucket.
 // Returns a nil value if the key does not exist or if the key is a nested bucket.
 // The returned value is only valid for the life of the transaction.
+// -- 单点查询
 func (b *Bucket) Get(key []byte) []byte {
 	k, v, flags := b.Cursor().seek(key)
 
@@ -282,6 +284,7 @@ func (b *Bucket) Get(key []byte) []byte {
 // If the key exist then its previous value will be overwritten.
 // Supplied value must remain valid for the life of the transaction.
 // Returns an error if the bucket was created from a read-only transaction, if the key is blank, if the key is too large, or if the value is too large.
+// -- 单点更新
 func (b *Bucket) Put(key []byte, value []byte) error {
 	if b.tx.db == nil {
 		return ErrTxClosed
@@ -314,6 +317,7 @@ func (b *Bucket) Put(key []byte, value []byte) error {
 // Delete removes a key from the bucket.
 // If the key does not exist then nothing is done and a nil error is returned.
 // Returns an error if the bucket was created from a read-only transaction.
+// -- 单点删除
 func (b *Bucket) Delete(key []byte) error {
 	if b.tx.db == nil {
 		return ErrTxClosed
@@ -523,6 +527,7 @@ func (b *Bucket) _forEachPageNode(pgid pgid, depth int, fn func(*page, *node, in
 }
 
 // spill writes all the nodes for this bucket to dirty pages.
+// -- b+树的节点分裂
 func (b *Bucket) spill() error {
 	// Spill all child buckets first.
 	for name, child := range b.buckets {
@@ -531,9 +536,11 @@ func (b *Bucket) spill() error {
 		// like a normal bucket and make the parent value a pointer to the page.
 		var value []byte
 		if child.inlineable() {
+			// -- 子节点足够小，直接释放内存，inline到当前节点的page中（此处先写到value）
 			child.free()
 			value = child.write()
 		} else {
+			// -- 递归处理子节点，最终把child.bucket写到value中
 			if err := child.spill(); err != nil {
 				return err
 			}
@@ -558,6 +565,7 @@ func (b *Bucket) spill() error {
 		if flags&bucketLeafFlag == 0 {
 			panic(fmt.Sprintf("unexpected bucket header flag: %x", flags))
 		}
+		// -- 更新当前节点中的key-value： 子节点name => value
 		c.node().put([]byte(name), []byte(name), value, 0, bucketLeafFlag)
 	}
 
@@ -567,9 +575,11 @@ func (b *Bucket) spill() error {
 	}
 
 	// Spill nodes.
+	// -- 真正的b+树节点分裂
 	if err := b.rootNode.spill(); err != nil {
 		return err
 	}
+	// -- 更新b+树根节点（b+树分裂可能产生新的根节点）
 	b.rootNode = b.rootNode.root()
 
 	// Update the root node for this bucket.
@@ -630,6 +640,7 @@ func (b *Bucket) write() []byte {
 }
 
 // rebalance attempts to balance all nodes.
+// -- b+树节点合并
 func (b *Bucket) rebalance() {
 	for _, n := range b.nodes {
 		n.rebalance()
