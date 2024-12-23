@@ -21,13 +21,14 @@ type txid uint64
 // them. Pages can not be reclaimed by the writer until no more transactions
 // are using them. A long running read transaction can cause the database to
 // quickly grow.
+// -- 事务
 type Tx struct {
-	writable       bool
-	managed        bool
+	writable       bool // -- true-写事务，false-读事务
+	managed        bool // -- 用于包住回调函数，禁止在回调函数中commit或rollback，从而简化设计
 	db             *DB
-	meta           *meta
-	root           Bucket
-	pages          map[pgid]*page
+	meta           *meta          // -- metaPage, 事务提交时持久化
+	root           Bucket         // -- table, 事务提交时持久化
+	pages          map[pgid]*page // -- 事务产生的脏页
 	stats          TxStats
 	commitHandlers []func()
 
@@ -41,6 +42,7 @@ type Tx struct {
 }
 
 // init initializes the transaction.
+// -- 事务初始化，把db的mata数据copy到一个新的tx中，txid++
 func (tx *Tx) init(db *DB) {
 	tx.db = db
 	tx.pages = nil
@@ -141,6 +143,7 @@ func (tx *Tx) OnCommit(fn func()) {
 // Commit writes all changes to disk and updates the meta page.
 // Returns an error if a disk write error occurs, or if Commit is
 // called on a read-only transaction.
+// -- 提交事务：b+树节点合并和分裂，page分配 & 持久化，必要时db扩容，metaData持久化
 func (tx *Tx) Commit() error {
 	_assert(!tx.managed, "managed tx commit not allowed")
 	if tx.db == nil {
@@ -237,6 +240,7 @@ func (tx *Tx) Commit() error {
 
 // Rollback closes the transaction and ignores all previous updates. Read-only
 // transactions must be rolled back and not committed.
+// -- 事务回滚，读写事务释放资源，重新加载meta（一共有两个meta，交替使用）
 func (tx *Tx) Rollback() error {
 	_assert(!tx.managed, "managed tx rollback not allowed")
 	if tx.db == nil {

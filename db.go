@@ -115,7 +115,7 @@ type DB struct {
 	batchMu sync.Mutex // -- batch 依赖的锁
 	batch   *batch
 
-	rwlock   sync.Mutex   // Allows only one writer at a time.
+	rwlock   sync.Mutex   // -- 保证写事务互斥，Allows only one writer at a time.
 	metalock sync.Mutex   // Protects meta page access.
 	mmaplock sync.RWMutex // Protects mmap access during remapping.
 	statlock sync.RWMutex // Protects stats access.
@@ -464,6 +464,7 @@ func (db *DB) Begin(writable bool) (*Tx, error) {
 	return db.beginTx()
 }
 
+// -- 创建一个读事务
 func (db *DB) beginTx() (*Tx, error) {
 	// Lock the meta pages while we initialize the transaction. We obtain
 	// the meta lock before the mmap lock because that's the order that the
@@ -502,6 +503,7 @@ func (db *DB) beginTx() (*Tx, error) {
 	return t, nil
 }
 
+// -- 创建一个读写事务
 func (db *DB) beginRWTx() (*Tx, error) {
 	// If the database was opened with Options.ReadOnly, return an error.
 	if db.readOnly {
@@ -529,6 +531,8 @@ func (db *DB) beginRWTx() (*Tx, error) {
 	db.rwtx = t
 
 	// Free any pages associated with closed read-only transactions.
+	// -- 对于当前的最小事务，释放比其txid更小的只读事务（即已过期的只读事务）的所有page
+	// -- 在 W1 commit 前，可能有 R1 引用了 W1 begin时的page，必须等到W2 begin时才能释放该资源
 	var minid txid = 0xFFFFFFFFFFFFFFFF
 	for _, t := range db.txs {
 		if t.meta.txid < minid {
@@ -579,6 +583,7 @@ func (db *DB) removeTx(tx *Tx) {
 // returned from the Update() method.
 //
 // Attempting to manually commit or rollback within the function will cause a panic.
+// -- 执行写事务，期间回调fn
 func (db *DB) Update(fn func(*Tx) error) error {
 	t, err := db.Begin(true)
 	if err != nil {
@@ -610,6 +615,7 @@ func (db *DB) Update(fn func(*Tx) error) error {
 // Any error that is returned from the function is returned from the View() method.
 //
 // Attempting to manually rollback within the function will cause a panic.
+// -- 执行读事务，期间回调fn
 func (db *DB) View(fn func(*Tx) error) error {
 	t, err := db.Begin(false)
 	if err != nil {
@@ -999,6 +1005,7 @@ func (m *meta) copy(dest *meta) {
 }
 
 // write writes the meta onto a page.
+// -- metaData持久化，注意两个 metaPage 轮流使用，这样写事务写page1失败回滚时，page2仍然有效，保证数据库的一致性
 func (m *meta) write(p *page) {
 	if m.root.root >= m.pgid {
 		panic(fmt.Sprintf("root bucket pgid (%d) above high water mark (%d)", m.root.root, m.pgid))
